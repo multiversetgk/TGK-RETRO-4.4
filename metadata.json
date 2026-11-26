@@ -1,0 +1,6 @@
+{
+  "name": "TGK TEST EMULATORS",
+  "description": "High-speed native canvas NES emulator with Local and Online 2-Player VS Mode Netplay, Save/Load States, and independent Port 1 & Port 2 Keyboard and Gamepad controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

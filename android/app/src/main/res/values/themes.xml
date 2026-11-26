@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.TgkTestEmulators" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">#111215</item>
+        <item name="android:statusBarColor">#111215</item>
+        <item name="android:navigationBarColor">#111215</item>
+        <item name="colorPrimary">#C82333</item>
+        <item name="colorAccent">#F59E0B</item>
+    </style>
+</resources>

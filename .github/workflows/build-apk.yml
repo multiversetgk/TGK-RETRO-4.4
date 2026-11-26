@@ -1,0 +1,185 @@
+name: Build TGK TEST EMULATORS Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'APK build variant'
+        required: false
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+permissions:
+  contents: read
+
+jobs:
+  verify-web-and-tests:
+    name: Verify FCEUmm Web, Champions System & Zero WebView
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Verify Zero WebView Usage
+        run: |
+          if grep -rnE "android\.webkit\.WebView|<WebView|react-native-webview|@capacitor|cordova|<iframe" android/ src/ index.html package.json; then
+            echo "ERROR: WebView/iframe usage detected!"
+            exit 1
+          fi
+          echo "Verified: Zero WebView usage across Android and Web sources."
+
+      - name: Run NES Core, Champions System, Rollback Netcode, Dual-Screen Race, Creator Hub, Settings, Timer & AI Preview Unit Tests
+        run: npx tsx --test src/utils/emulator.test.ts src/utils/champions.test.ts src/utils/settingsAndTurbo.test.ts src/utils/dualRaceAndNetplay.test.ts src/utils/creatorHub.test.ts src/utils/rollbackNetplay.test.ts src/utils/aiGamerPreview.test.ts src/utils/sessionTimer.test.ts
+
+      - name: TypeScript Lint & Production Build Check
+        run: |
+          npm run lint
+          npm run build
+
+  build-android-apk:
+    name: Build Native Android APK (libretro-fceumm + C++ JNI)
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: '26.3.11579264'
+      CMAKE_VERSION: '3.22.1'
+      ANDROID_API: '24'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK, NDK & CMake
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 34, NDK & CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;${CMAKE_VERSION}"
+
+      - name: Clone & Cross-Compile libretro-fceumm for Android (arm64-v8a & armeabi-v7a)
+        run: |
+          set -euo pipefail
+          NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          git clone --depth=1 https://github.com/libretro/libretro-fceumm.git /tmp/libretro-fceumm
+          cd /tmp/libretro-fceumm
+
+          mkdir -p "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a"
+
+          if [ -f "src/drivers/libretro/jni/Android.mk" ] || [ -f "jni/Android.mk" ]; then
+            JNI_DIR="jni"
+            [ -f "src/drivers/libretro/jni/Android.mk" ] && JNI_DIR="src/drivers/libretro/jni"
+            "${NDK_HOME}/ndk-build" \
+              -C "${JNI_DIR}" \
+              APP_ABI="arm64-v8a armeabi-v7a" \
+              APP_PLATFORM="android-${ANDROID_API}" \
+              -j"$(nproc)"
+            ARM64_SO="$(find "${JNI_DIR}/../libs/arm64-v8a" -maxdepth 1 -name '*.so' | head -n 1)"
+            ARM32_SO="$(find "${JNI_DIR}/../libs/armeabi-v7a" -maxdepth 1 -name '*.so' | head -n 1)"
+            cp -f "${ARM64_SO}" \
+              "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/libfceumm_libretro_android.so"
+            cp -f "${ARM32_SO}" \
+              "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a/libfceumm_libretro_android.so"
+          else
+            # Cross-compile directly via Makefile.libretro using Android NDK LLVM Clang
+            make -f Makefile.libretro clean
+            make -f Makefile.libretro \
+              platform=unix \
+              CC="${TOOLCHAIN}/aarch64-linux-android${ANDROID_API}-clang" \
+              CXX="${TOOLCHAIN}/aarch64-linux-android${ANDROID_API}-clang++" \
+              AR="${TOOLCHAIN}/llvm-ar" \
+              LD="${TOOLCHAIN}/aarch64-linux-android${ANDROID_API}-clang" \
+              SHARED="-shared -Wl,--no-undefined" \
+              LDFLAGS="-lm" \
+              TARGET="libfceumm_libretro_android.so" \
+              -j"$(nproc)"
+            ARM64_SO="$(find . -maxdepth 2 -name '*fceumm*.so' | head -n 1)"
+            cp -f "${ARM64_SO}" \
+              "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/libfceumm_libretro_android.so"
+
+            make -f Makefile.libretro clean
+            make -f Makefile.libretro \
+              platform=unix \
+              CC="${TOOLCHAIN}/armv7a-linux-androideabi${ANDROID_API}-clang" \
+              CXX="${TOOLCHAIN}/armv7a-linux-androideabi${ANDROID_API}-clang++" \
+              AR="${TOOLCHAIN}/llvm-ar" \
+              LD="${TOOLCHAIN}/armv7a-linux-androideabi${ANDROID_API}-clang" \
+              SHARED="-shared -Wl,--no-undefined" \
+              LDFLAGS="-lm" \
+              TARGET="libfceumm_libretro_android.so" \
+              -j"$(nproc)"
+            ARM32_SO="$(find . -maxdepth 2 -name '*fceumm*.so' | head -n 1)"
+            cp -f "${ARM32_SO}" \
+              "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a/libfceumm_libretro_android.so"
+          fi
+
+          test -s "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/libfceumm_libretro_android.so"
+          test -s "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a/libfceumm_libretro_android.so"
+          ls -lh "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/"
+          ls -lh "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a/"
+
+      - name: Setup Gradle 8.10.2 (No local wrapper JAR required)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build Native Android APK
+        working-directory: android
+        run: |
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            gradle assembleRelease --no-daemon --stacktrace
+          else
+            gradle assembleDebug --no-daemon --stacktrace
+          fi
+
+      - name: Prepare & Verify Installable APK Artifact
+        run: |
+          set -euo pipefail
+          mkdir -p out-apk
+          if [ "${{ inputs.build_type }}" = "release" ]; then
+            APK_SRC="$(find android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -n 1)"
+            cp "${APK_SRC}" out-apk/TGK-TEST-EMULATORS-release.apk
+          else
+            APK_SRC="$(find android/app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' | head -n 1)"
+            cp "${APK_SRC}" out-apk/TGK-TEST-EMULATORS-debug.apk
+          fi
+          test -s out-apk/*.apk
+          ls -lh out-apk/
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TGK-TEST-EMULATORS-android-apk
+          path: out-apk/*.apk
+          retention-days: 30
