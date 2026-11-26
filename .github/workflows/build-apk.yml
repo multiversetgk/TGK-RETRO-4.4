@@ -34,11 +34,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install --no-audit --no-fund
-          fi
+          npm install --legacy-peer-deps --no-audit --no-fund
 
       - name: Verify Zero WebView Usage
         run: |
@@ -75,28 +71,23 @@ jobs:
 
       - name: Setup Android SDK, NDK & CMake
         uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK Platform 34, NDK & CMake
-        run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "ndk;${NDK_VERSION}" \
-            "cmake;${CMAKE_VERSION}"
+        with:
+          accept-sdk-licenses: true
+          packages: |
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;26.3.11579264
+            cmake;3.22.1
 
       - name: Clone & Cross-Compile libretro-fceumm for Android (arm64-v8a & armeabi-v7a)
         run: |
           set -euo pipefail
           NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
           TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-
           git clone --depth=1 https://github.com/libretro/libretro-fceumm.git /tmp/libretro-fceumm
           cd /tmp/libretro-fceumm
-
           mkdir -p "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a"
-
           if [ -f "src/drivers/libretro/jni/Android.mk" ] || [ -f "jni/Android.mk" ]; then
             JNI_DIR="jni"
             [ -f "src/drivers/libretro/jni/Android.mk" ] && JNI_DIR="src/drivers/libretro/jni"
@@ -127,7 +118,6 @@ jobs:
             ARM64_SO="$(find . -maxdepth 2 -name '*fceumm*.so' | head -n 1)"
             cp -f "${ARM64_SO}" \
               "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/libfceumm_libretro_android.so"
-
             make -f Makefile.libretro clean
             make -f Makefile.libretro \
               platform=unix \
@@ -143,7 +133,6 @@ jobs:
             cp -f "${ARM32_SO}" \
               "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a/libfceumm_libretro_android.so"
           fi
-
           test -s "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/libfceumm_libretro_android.so"
           test -s "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a/libfceumm_libretro_android.so"
           ls -lh "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a/"
@@ -182,4 +171,5 @@ jobs:
         with:
           name: TGK-TEST-EMULATORS-android-apk
           path: out-apk/*.apk
-          retention-days: 30
+          re
+          tention-days: 30
