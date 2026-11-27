@@ -52,6 +52,31 @@ jobs:
           npm run lint
           npm run build
 
+  native-smoke-test:
+    name: Native Bridge Smoke Test (load ROM + 60 frames + save-state roundtrip)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17 (for jni.h)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Fetch pinned libretro-fceumm
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/fceumm-host && cd /tmp/fceumm-host
+          git init -q
+          git remote add origin https://github.com/libretro/libretro-fceumm.git
+          git fetch --depth=1 origin fb919fb6fa881aaa6279b765d480220579e5c606
+          git checkout -q FETCH_HEAD
+
+      - name: Run native smoke test
+        run: bash android/native-smoke/run.sh /tmp/fceumm-host
+
   build-android-apk:
     name: Build Native Android APK (libretro-fceumm + C++ JNI)
     runs-on: ubuntu-latest

@@ -17,6 +17,20 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
     private val systemDir: File = File(appContext.filesDir, "fceumm_system").apply { mkdirs() }
     private val saveStore = QuickSaveStore(File(appContext.filesDir, "savestates"))
     private val batteryDir: File = File(appContext.filesDir, "battery").apply { mkdirs() }
+    private val romCacheDir: File = File(appContext.cacheDir, "rom_cache").apply { mkdirs() }
+
+    /**
+     * libretro-fceumm opens cartridges by *file path* (need_fullpath = true) and fails with
+     * "Error opening <name>" for a bare display name, so the ROM must exist as a real file.
+     * Keeps the original (sanitised) name because the core uses it to detect region tags.
+     */
+    private fun writeRomToCache(romBytes: ByteArray, displayName: String): File? = runCatching {
+        romCacheDir.listFiles()?.forEach { it.delete() }
+        var safe = displayName.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ ()\\[\\]\\-]"), "_").trim()
+        if (safe.isEmpty()) safe = "cartridge"
+        if (!safe.lowercase().endsWith(".nes")) safe += ".nes"
+        File(romCacheDir, safe).also { it.writeBytes(romBytes) }
+    }.getOrNull()
 
     private fun batteryFile(): File? {
         val hash = loadedRomMeta?.sha256Hex ?: return null
@@ -78,7 +92,15 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
         }
 
         val sanitizedName = romName.ifBlank { "cartridge.nes" }
-        val loaded = nativeLoadRom(romBytes, sanitizedName)
+        val romFile = writeRomToCache(romBytes, sanitizedName)
+        if (romFile == null) {
+            lastError = "Could not write the ROM to app storage (storage full?)"
+            loadedRomMeta = null
+            loadedRomBytes = null
+            internalState = EmulatorState.IDLE
+            return false
+        }
+        val loaded = nativeLoadRom(romBytes, romFile.absolutePath)
         if (!loaded) {
             lastError = "NES core rejected this ROM (unsupported mapper or corrupt file)"
             loadedRomMeta = null
