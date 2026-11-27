@@ -84,8 +84,14 @@ jobs:
           set -euo pipefail
           NDK_HOME="${ANDROID_HOME}/ndk/${NDK_VERSION}"
           TOOLCHAIN="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          git clone --depth=1 https://github.com/libretro/libretro-fceumm.git /tmp/libretro-fceumm
+          # Pinned for reproducible builds (libretro-fceumm commit as of 2026-11-27)
+          FCEUMM_COMMIT="fb919fb6fa881aaa6279b765d480220579e5c606"
+          mkdir -p /tmp/libretro-fceumm
           cd /tmp/libretro-fceumm
+          git init -q
+          git remote add origin https://github.com/libretro/libretro-fceumm.git
+          git fetch --depth=1 origin "${FCEUMM_COMMIT}"
+          git checkout -q FETCH_HEAD
           mkdir -p "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "${GITHUB_WORKSPACE}/android/app/src/main/jniLibs/armeabi-v7a"
           if [ -f "src/drivers/libretro/jni/Android.mk" ] || [ -f "jni/Android.mk" ]; then
@@ -171,5 +177,4 @@ jobs:
         with:
           name: TGK-TEST-EMULATORS-android-apk
           path: out-apk/*.apk
-          re
-          tention-days: 30
+          retention-days: 30
