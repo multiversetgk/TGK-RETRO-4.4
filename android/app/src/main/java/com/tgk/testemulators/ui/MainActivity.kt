@@ -891,11 +891,11 @@ class MainActivity : AppCompatActivity() {
         return PeerHandshakeInfo(
             protocolVersion = NETPLAY_PROTOCOL_VERSION,
             coreId = emulatorCore.coreId,
-            coreVersion = emulatorCore.coreVersion,
-            romName = meta.fileName,
+            coreVersion = emulatorCore.coreName,
+            romName = "${meta.title}.nes",
             romHash = meta.hashHex,
             romSha256 = meta.sha256Hex,
-            romSizeBytes = meta.romSizeBytes,
+            romSizeBytes = meta.sizeBytes,
             determinismVerified = onlineDeterminismVerified
         )
     }
@@ -1590,7 +1590,7 @@ class MainActivity : AppCompatActivity() {
                         if (bytes == null || meta == null) {
                             Toast.makeText(this, "Load a .nes ROM first", Toast.LENGTH_SHORT).show()
                         } else {
-                            val prepared = romTransferManager.prepareOffer(meta.fileName, bytes)
+                            val prepared = romTransferManager.prepareOffer("${meta.title}.nes", bytes)
                             if (prepared == null) {
                                 Toast.makeText(this, "ROM exceeds 4 MB transfer cap or invalid iNES header", Toast.LENGTH_LONG).show()
                             } else {

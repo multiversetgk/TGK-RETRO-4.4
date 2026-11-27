@@ -32,9 +32,9 @@ enum class NesButton(val retroId: Int, val netplayBit: Int, val label: String) {
 /**
  * Physical NES controller ports for Local & Online 2-Player VS Mode.
  */
-enum class PlayerPort(val index: Int) {
-    PORT_1(0),
-    PORT_2(1)
+enum class PlayerPort(val index: Int, val label: String) {
+    PORT_1(0, "P1"),
+    PORT_2(1, "P2")
 }
 
 enum class EmulatorState {
