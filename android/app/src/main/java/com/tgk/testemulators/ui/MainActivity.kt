@@ -197,6 +197,9 @@ class MainActivity : AppCompatActivity() {
         applyGameLayout()
         timerHandler.postDelayed(sessionTimerTicker, 1000L)
 
+        (getSystemService(Context.INPUT_SERVICE) as? android.hardware.input.InputManager)
+            ?.registerInputDeviceListener(inputDeviceListener, null)
+
         statusLabel.text = if (!coreReady) {
             "Engine unavailable"
         } else {
@@ -237,6 +240,7 @@ class MainActivity : AppCompatActivity() {
         audioPlayer.pause()
         turboController.releaseAll()
         inputController.releaseAll()
+        emulatorCore.flushSaveRam()
     }
 
     override fun onDestroy() {
@@ -244,6 +248,8 @@ class MainActivity : AppCompatActivity() {
         flushSessionUsageReport()
         leaveOnlineRoom(silent = true)
         stopEmulationLoop()
+        (getSystemService(Context.INPUT_SERVICE) as? android.hardware.input.InputManager)
+            ?.unregisterInputDeviceListener(inputDeviceListener)
         transferExecutor.shutdownNow()
         netplaySendExecutor.shutdownNow()
         turboController.releaseAll()
@@ -1636,12 +1642,20 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private val inputDeviceListener = object : android.hardware.input.InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) {}
+        override fun onInputDeviceChanged(deviceId: Int) {}
+        override fun onInputDeviceRemoved(deviceId: Int) {
+            inputController.onInputDeviceRemoved(deviceId)
+        }
+    }
+
     private fun startEmulationLoop() {
         if (loopActive.getAndSet(true)) return
         emulationThread = Thread({
             val frameBuffer = IntArray(IEmulatorCore.VIDEO_PIXEL_COUNT)
             val audioBuffer = ShortArray(4096)
-            val frameNanos = 16_639_267L // Exact NTSC 60.0988 Hz
+            // Frame time follows the core-reported FPS (NTSC 60.0988 Hz, PAL ~50.007 Hz)
 
             var nextFrameTime = System.nanoTime()
             var hudTickCounter = 0
@@ -1715,7 +1729,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                nextFrameTime += frameNanos
+                val coreFps = emulatorCore.currentRom?.fps?.takeIf { it in 30.0..75.0 } ?: 60.0988
+                nextFrameTime += (1_000_000_000.0 / coreFps).toLong()
                 val sleepNanos = nextFrameTime - System.nanoTime()
                 if (sleepNanos > 0) {
                     val millis = sleepNanos / 1_000_000L

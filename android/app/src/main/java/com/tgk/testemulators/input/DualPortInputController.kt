@@ -120,6 +120,16 @@ class DualPortInputController(
         return true
     }
 
+    /** Frees the port held by a disconnected gamepad so a re-plugged pad gets assigned correctly. */
+    fun onInputDeviceRemoved(deviceId: Int) {
+        val port = deviceToPort.remove(deviceId) ?: return
+        hatState.remove(port)
+        portBitmasks[port.index].set(0)
+        if (onlineLockedPort == null) {
+            core.releaseAllButtons(port)
+        }
+    }
+
     fun releaseAll() {
         portBitmasks[0].set(0)
         portBitmasks[1].set(0)

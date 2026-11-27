@@ -79,6 +79,9 @@ interface IEmulatorCore {
     fun unloadRom()
     fun getLoadedRomBytes(): ByteArray?
 
+    /** Writes the cartridge's battery-backed save RAM (in-game saves) to disk, if the cartridge has any. */
+    fun flushSaveRam()
+
     fun start()
     fun pause()
     fun resume()

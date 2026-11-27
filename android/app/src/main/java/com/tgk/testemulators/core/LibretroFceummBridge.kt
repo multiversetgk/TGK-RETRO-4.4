@@ -16,6 +16,12 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
     private val nativeLibDir: String = appContext.applicationInfo.nativeLibraryDir
     private val systemDir: File = File(appContext.filesDir, "fceumm_system").apply { mkdirs() }
     private val saveStore = QuickSaveStore(File(appContext.filesDir, "savestates"))
+    private val batteryDir: File = File(appContext.filesDir, "battery").apply { mkdirs() }
+
+    private fun batteryFile(): File? {
+        val hash = loadedRomMeta?.sha256Hex ?: return null
+        return File(batteryDir, "$hash.sav")
+    }
 
     private val lock = Any()
     private var initialized = false
@@ -94,10 +100,30 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
             sampleRate = nativeGetSampleRate().takeIf { it >= 8000 } ?: 44100
         )
         internalState = EmulatorState.RUNNING
+        // Restore battery-backed in-game save (e.g. Zelda, Final Fantasy) if one exists
+        runCatching {
+            batteryFile()?.takeIf { it.exists() && it.length() > 0L }?.let { nativeWriteSaveRam(it.readBytes()) }
+        }
         true
     }
 
+    override fun flushSaveRam() = synchronized(lock) {
+        if (!isRomLoaded) return@synchronized
+        runCatching {
+            val file = batteryFile() ?: return@runCatching
+            val data = nativeReadSaveRam() ?: return@runCatching
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            tmp.writeBytes(data)
+            if (!tmp.renameTo(file)) {
+                file.writeBytes(data)
+                tmp.delete()
+            }
+        }
+        Unit
+    }
+
     override fun unloadRom() = synchronized(lock) {
+        flushSaveRam()
         nativeUnloadRom()
         loadedRomMeta = null
         loadedRomBytes = null
@@ -288,6 +314,7 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
     }
 
     override fun dispose() = synchronized(lock) {
+        flushSaveRam()
         nativeShutdown()
         initialized = false
         loadedRomMeta = null
@@ -319,6 +346,8 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
     private external fun nativeGetFps(): Double
     private external fun nativeGetCoreVersion(): String
     private external fun nativeReadSystemRam(outRam: ByteArray): Boolean
+    private external fun nativeReadSaveRam(): ByteArray?
+    private external fun nativeWriteSaveRam(data: ByteArray): Boolean
     private external fun nativeShutdown()
 
     companion object {

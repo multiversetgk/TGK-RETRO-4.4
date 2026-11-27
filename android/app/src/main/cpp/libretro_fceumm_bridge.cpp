@@ -808,6 +808,50 @@ Java_com_tgk_testemulators_core_LibretroFceummBridge_nativeReadSystemRam(
     return JNI_TRUE;
 }
 
+JNIEXPORT jbyteArray JNICALL
+Java_com_tgk_testemulators_core_LibretroFceummBridge_nativeReadSaveRam(
+    JNIEnv* env,
+    jobject /*thiz*/
+) {
+    std::lock_guard<std::mutex> lock(g_coreMutex);
+    if (!g_gameLoaded || !g_core.retro_get_memory_data || !g_core.retro_get_memory_size) {
+        return nullptr;
+    }
+    const size_t size = g_core.retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    const void* ptr = g_core.retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    if (!ptr || size == 0) {
+        return nullptr; // Cartridge has no battery-backed RAM
+    }
+    jbyteArray out = env->NewByteArray(static_cast<jsize>(size));
+    if (out) {
+        env->SetByteArrayRegion(out, 0, static_cast<jsize>(size), reinterpret_cast<const jbyte*>(ptr));
+    }
+    return out;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_tgk_testemulators_core_LibretroFceummBridge_nativeWriteSaveRam(
+    JNIEnv* env,
+    jobject /*thiz*/,
+    jbyteArray jData
+) {
+    if (!jData) return JNI_FALSE;
+    std::lock_guard<std::mutex> lock(g_coreMutex);
+    if (!g_gameLoaded || !g_core.retro_get_memory_data || !g_core.retro_get_memory_size) {
+        return JNI_FALSE;
+    }
+    const size_t size = g_core.retro_get_memory_size(RETRO_MEMORY_SAVE_RAM);
+    void* ptr = g_core.retro_get_memory_data(RETRO_MEMORY_SAVE_RAM);
+    if (!ptr || size == 0) {
+        return JNI_FALSE;
+    }
+    const jsize len = env->GetArrayLength(jData);
+    if (len <= 0) return JNI_FALSE;
+    const size_t copyLen = std::min<size_t>(size, static_cast<size_t>(len));
+    env->GetByteArrayRegion(jData, 0, static_cast<jsize>(copyLen), reinterpret_cast<jbyte*>(ptr));
+    return JNI_TRUE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_tgk_testemulators_core_LibretroFceummBridge_nativeShutdown(
     JNIEnv* /*env*/,
