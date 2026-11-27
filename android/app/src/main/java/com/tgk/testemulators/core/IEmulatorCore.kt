@@ -71,6 +71,9 @@ interface IEmulatorCore {
     val currentRom: RomMetadata?
     val isRomLoaded: Boolean
 
+    /** Human-readable reason for the most recent initialize()/loadRom() failure, or null. */
+    val lastError: String?
+
     fun initialize(): Boolean
     fun loadRom(romBytes: ByteArray, romName: String): Boolean
     fun unloadRom()

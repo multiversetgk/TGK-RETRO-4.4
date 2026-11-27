@@ -443,11 +443,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** If [raw] is a .zip archive, returns the first .nes entry (name, bytes); otherwise null. */
+    private fun extractFirstNesFromZip(raw: ByteArray): Pair<String, ByteArray>? {
+        if (raw.size < 4 || raw[0] != 0x50.toByte() || raw[1] != 0x4B.toByte()) return null
+        return runCatching {
+            java.util.zip.ZipInputStream(raw.inputStream()).use { zin ->
+                var entry = zin.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory && entry.name.lowercase().endsWith(".nes")) {
+                        return@runCatching entry.name.substringAfterLast('/') to zin.readBytes()
+                    }
+                    entry = zin.nextEntry
+                }
+                null
+            }
+        }.getOrNull()
+    }
+
     private fun loadRomFromUri(uri: Uri) {
-        val fileName = resolveDisplayName(uri)
-        val bytes = runCatching {
+        var fileName = resolveDisplayName(uri)
+        var bytes = runCatching {
             contentResolver.openInputStream(uri)?.use { it.readBytes() }
         }.getOrNull()
+
+        val rawBytes = bytes
+        if (rawBytes != null) {
+            val inner = extractFirstNesFromZip(rawBytes)
+            if (inner != null) {
+                fileName = inner.first
+                bytes = inner.second
+            }
+        }
 
         if (bytes == null || bytes.size < 16) {
             Toast.makeText(this, "Could not read .nes ROM file", Toast.LENGTH_SHORT).show()
@@ -457,7 +483,11 @@ class MainActivity : AppCompatActivity() {
         stopEmulationLoop()
         val ok = emulatorCore.loadRom(bytes, fileName)
         if (!ok) {
-            Toast.makeText(this, "Invalid iNES (.nes) cartridge", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                emulatorCore.lastError ?: "Invalid iNES (.nes) cartridge",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
 

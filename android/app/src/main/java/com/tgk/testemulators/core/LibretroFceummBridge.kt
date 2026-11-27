@@ -29,6 +29,10 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
 
     override val coreId: String = "libretro-fceumm-android"
 
+    @Volatile
+    override var lastError: String? = null
+        private set
+
     override val coreName: String
         get() = if (initialized) nativeGetCoreVersion() else "libretro-fceumm (uninitialized)"
 
@@ -44,10 +48,14 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
     override fun initialize(): Boolean = synchronized(lock) {
         if (initialized) return true
         initialized = nativeInitCore(nativeLibDir, systemDir.absolutePath)
+        if (!initialized) {
+            lastError = "NES core failed to load (libfceumm_libretro_android.so missing or incompatible in $nativeLibDir)"
+        }
         initialized
     }
 
     override fun loadRom(romBytes: ByteArray, romName: String): Boolean = synchronized(lock) {
+        lastError = null
         if (!initialized && !initialize()) {
             return false
         }
@@ -58,12 +66,15 @@ class LibretroFceummBridge(context: Context) : IEmulatorCore {
             romBytes[2] != 0x53.toByte() ||
             romBytes[3] != 0x1A.toByte()
         ) {
+            val head = romBytes.take(4).joinToString(" ") { "%02X".format(it) }
+            lastError = "Not an iNES .nes file (header $head, size ${romBytes.size} bytes)"
             return false
         }
 
         val sanitizedName = romName.ifBlank { "cartridge.nes" }
         val loaded = nativeLoadRom(romBytes, sanitizedName)
         if (!loaded) {
+            lastError = "NES core rejected this ROM (unsupported mapper or corrupt file)"
             loadedRomMeta = null
             loadedRomBytes = null
             internalState = EmulatorState.IDLE
