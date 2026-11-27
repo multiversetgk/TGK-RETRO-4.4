@@ -72,12 +72,8 @@ jobs:
       - name: Setup Android SDK, NDK & CMake
         uses: android-actions/setup-android@v3
         with:
-          accept-sdk-licenses: true
-          packages: |
-            platforms;android-34
-            build-tools;34.0.0
-            ndk;26.3.11579264
-            cmake;3.22.1
+          accept-android-sdk-licenses: true
+          packages: 'platforms;android-34 build-tools;34.0.0 ndk;26.3.11579264 cmake;3.22.1'
 
       - name: Clone & Cross-Compile libretro-fceumm for Android (arm64-v8a & armeabi-v7a)
         run: |
