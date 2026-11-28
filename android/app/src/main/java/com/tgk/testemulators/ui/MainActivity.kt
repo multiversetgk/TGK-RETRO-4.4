@@ -44,6 +44,8 @@ import com.tgk.testemulators.champions.SessionMode
 import com.tgk.testemulators.creator.CreatorHubRepository
 import com.tgk.testemulators.input.DualPortInputController
 import com.tgk.testemulators.input.TurboController
+import com.tgk.testemulators.library.GameLibraryStore
+import com.tgk.testemulators.library.LibraryGame
 import com.tgk.testemulators.netplay.ChecksumSyncStatus
 import com.tgk.testemulators.netplay.FrameInputEntry
 import com.tgk.testemulators.netplay.NETPLAY_PROTOCOL_VERSION
@@ -157,9 +159,45 @@ class MainActivity : AppCompatActivity() {
     private val loopActive = AtomicBoolean(false)
     private var emulationThread: Thread? = null
 
+    private lateinit var libraryStore: GameLibraryStore
+    private var libraryContainer: LinearLayout? = null
+    private var selectedLibraryUri: String? = null
+
+    /** "Pick .nes File": remember the file in the Game Library and select it (Play Now launches it). */
     private val romPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            loadRomFromUri(uri)
+            runCatching {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val name = resolveDisplayName(uri)
+            val size = runCatching {
+                contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                    if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
+                } ?: 0L
+            }.getOrDefault(0L)
+            val game = libraryStore.addGame(uri, name, size)
+            selectedLibraryUri = game.uri
+            renderLibrary()
+            Toast.makeText(this, "Added ${game.title} — tap Play Now", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** "Scan Folder": pick a ROM folder once; it is scanned (and re-scanned on launch) for .nes/.zip. */
+    private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null) {
+            Toast.makeText(this, "Scanning folder…", Toast.LENGTH_SHORT).show()
+            Thread {
+                val added = runCatching { libraryStore.scanFolder(tree) }.getOrDefault(-1)
+                runOnUiThread {
+                    renderLibrary()
+                    val msg = when {
+                        added < 0 -> "Could not read that folder"
+                        added == 0 -> "No new .nes/.zip games found"
+                        else -> "Found $added game(s)"
+                    }
+                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                }
+            }.start()
         }
     }
 
@@ -187,12 +225,21 @@ class MainActivity : AppCompatActivity() {
         romTransferManager = RomTransferManager(applicationContext)
         netplayPrefs = getSharedPreferences("tgk_netplay_prefs", Context.MODE_PRIVATE)
         usagePrefs = getSharedPreferences("tgk_usage_reports", Context.MODE_PRIVATE)
+        libraryStore = GameLibraryStore(applicationContext)
 
         emuSettings = settingsRepo.loadEmulatorSettings("libretro-fceumm")
         gameLayout = settingsRepo.loadGameLayout("default", emuSettings.stickMode)
 
         val coreReady = emulatorCore.initialize()
         setContentView(buildRootLayout())
+
+        // Refresh the remembered ROM folder in the background so new games appear automatically.
+        if (libraryStore.folderUri() != null) {
+            Thread {
+                libraryStore.rescanSavedFolder()
+                runOnUiThread { renderLibrary() }
+            }.start()
+        }
         applyEmulatorSettings()
         applyGameLayout()
         timerHandler.postDelayed(sessionTimerTicker, 1000L)
@@ -497,6 +544,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        libraryStore.markPlayed(uri.toString())
         val meta = emulatorCore.currentRom
         val romHash = meta?.hashHex ?: "default"
         if (meta != null) {
@@ -1320,6 +1368,7 @@ class MainActivity : AppCompatActivity() {
         isEditingLayout = false
         emulatorCore.unloadRom()
         surfaceView.drawIdleScreen()
+        renderLibrary()
         cartridgeShelfOverlay.visibility = View.VISIBLE
         layoutEditBanner.visibility = View.GONE
         sessionTimerBadge.visibility = View.GONE
@@ -2087,116 +2136,372 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    // ---- Game Library home screen (native Views, premium dark look) ----
+
+    private var libraryShowLimit = LIBRARY_PAGE
+
+    private fun formatPlayTime(totalSeconds: Int): String {
+        val s = totalSeconds.coerceAtLeast(0)
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        return when {
+            h > 0 -> "${h}h ${m}m"
+            m > 0 -> "${m}m ${s % 60}s"
+            else -> "${s}s"
+        }
+    }
+
+    private fun playSecondsFor(game: LibraryGame): Int =
+        usagePrefs.getInt("game_${game.title.lowercase()}", 0)
+
+    private fun launchSelectedGame() {
+        val games = libraryStore.games()
+        val target = games.firstOrNull { it.uri == selectedLibraryUri }
+            ?: libraryStore.recent(1).firstOrNull()
+            ?: games.firstOrNull()
+        if (target == null) {
+            romPicker.launch(arrayOf("*/*"))
+            return
+        }
+        selectedLibraryUri = target.uri
+        loadRomFromUri(Uri.parse(target.uri))
+    }
+
+    private fun outlineButton(label: String, colorHex: String, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor(colorHex))
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            stateListAnimator = null
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#0B1020"))
+                setStroke(dp(1), Color.parseColor(colorHex))
+                cornerRadius = dp(12).toFloat()
+            }
+            setOnClickListener { onClick() }
+        }
+
+    private fun renderLibrary() {
+        val box = libraryContainer ?: return
+        box.removeAllViews()
+        val games = libraryStore.gamesSorted()
+
+        if (games.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "No games yet.\nTap Scan Folder to find all your .nes ROMs, or Pick .nes File to add one."
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(18), dp(8), dp(18))
+            })
+            return
+        }
+
+        box.addView(TextView(this).apply {
+            val total = usagePrefs.getInt("total_seconds", 0)
+            text = "${games.size} game${if (games.size == 1) "" else "s"} ready · ${formatPlayTime(total)} played"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 11f
+            setPadding(0, dp(4), 0, dp(6))
+        })
+
+        val recent = libraryStore.recent(3)
+        if (recent.isNotEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "RECENT GAMES"
+                setTextColor(Color.parseColor("#22D3EE"))
+                textSize = 10f
+                typeface = Typeface.MONOSPACE
+                setPadding(0, dp(6), 0, dp(4))
+            })
+            recent.forEach { g ->
+                box.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#0B1020"))
+                        setStroke(dp(1), Color.parseColor("#1E293B"))
+                        cornerRadius = dp(10).toFloat()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(6) }
+                    isClickable = true
+                    setOnClickListener {
+                        selectedLibraryUri = g.uri
+                        loadRomFromUri(Uri.parse(g.uri))
+                    }
+                    addView(TextView(this@MainActivity).apply {
+                        text = "▶"
+                        setTextColor(Color.parseColor("#22D3EE"))
+                        textSize = 14f
+                        setPadding(0, 0, dp(10), 0)
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = g.title
+                        setTextColor(Color.parseColor("#F8FAFC"))
+                        textSize = 13f
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = formatPlayTime(playSecondsFor(g))
+                        setTextColor(Color.parseColor("#94A3B8"))
+                        textSize = 11f
+                    })
+                })
+            }
+        }
+
+        box.addView(TextView(this).apply {
+            text = "ALL GAMES"
+            setTextColor(Color.parseColor("#A78BFA"))
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(10), 0, dp(6))
+        })
+
+        val accents = listOf("#22D3EE", "#A78BFA", "#F59E0B", "#3B82F6")
+        val shown = games.take(libraryShowLimit)
+        shown.chunked(2).forEachIndexed { rowIdx, pair ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(8) }
+            }
+            pair.forEachIndexed { colIdx, g ->
+                val accent = accents[(rowIdx * 2 + colIdx) % accents.size]
+                val selected = g.uri == selectedLibraryUri
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor(if (selected) "#0F1B2E" else "#0B1020"))
+                        setStroke(dp(if (selected) 2 else 1), Color.parseColor(if (selected) "#22D3EE" else "#1E293B"))
+                        cornerRadius = dp(12).toFloat()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        if (colIdx == 0) marginEnd = dp(4) else marginStart = dp(4)
+                    }
+                    isClickable = true
+                    setOnClickListener {
+                        if (selectedLibraryUri == g.uri) {
+                            loadRomFromUri(Uri.parse(g.uri))
+                        } else {
+                            selectedLibraryUri = g.uri
+                            renderLibrary()
+                        }
+                    }
+                }
+                card.addView(View(this).apply {
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor(accent))
+                        cornerRadii = floatArrayOf(
+                            dp(12).toFloat(), dp(12).toFloat(), dp(12).toFloat(), dp(12).toFloat(), 0f, 0f, 0f, 0f
+                        )
+                    }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(5))
+                })
+                val body = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(10), dp(8), dp(10), dp(10))
+                }
+                val head = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.TOP
+                }
+                head.addView(TextView(this).apply {
+                    text = g.title
+                    setTextColor(Color.parseColor("#F8FAFC"))
+                    textSize = 13f
+                    typeface = Typeface.DEFAULT_BOLD
+                    minLines = 2
+                    maxLines = 2
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                head.addView(TextView(this).apply {
+                    text = "✕"
+                    setTextColor(Color.parseColor("#64748B"))
+                    textSize = 13f
+                    setPadding(dp(8), 0, 0, dp(4))
+                    setOnClickListener {
+                        libraryStore.remove(g.uri)
+                        if (selectedLibraryUri == g.uri) selectedLibraryUri = null
+                        renderLibrary()
+                        Toast.makeText(this@MainActivity, "Removed from library (file not deleted)", Toast.LENGTH_SHORT).show()
+                    }
+                })
+                body.addView(head)
+                body.addView(TextView(this).apply {
+                    text = "NES · " + (if (selected) "Selected" else "Ready")
+                    setTextColor(Color.parseColor(if (selected) "#22D3EE" else "#94A3B8"))
+                    textSize = 10f
+                    typeface = Typeface.MONOSPACE
+                    setPadding(0, dp(6), 0, 0)
+                })
+                card.addView(body)
+                row.addView(card)
+            }
+            if (pair.size == 1) {
+                row.addView(View(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, 1, 1f).apply { marginStart = dp(4) }
+                })
+            }
+            box.addView(row)
+        }
+
+        if (games.size > shown.size) {
+            box.addView(outlineButton("Show more (${games.size - shown.size})", "#94A3B8") {
+                libraryShowLimit += LIBRARY_PAGE
+                renderLibrary()
+            })
+        }
+    }
+
     private fun buildCartridgeShelfOverlay(): LinearLayout {
         val shelf = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#0F1218"))
-            setPadding(dp(20), dp(16), dp(20), dp(16))
+            setBackgroundColor(Color.parseColor("#070910"))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(20), dp(16), dp(20))
         }
 
-        val deckCard = LinearLayout(this).apply {
+        // Title: TGK RETRO 4.4
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            addView(TextView(this@MainActivity).apply {
+                text = "TGK RETRO "
+                setTextColor(Color.parseColor("#F8FAFC"))
+                textSize = 26f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "4.4"
+                setTextColor(Color.parseColor("#22D3EE"))
+                textSize = 26f
+                typeface = Typeface.DEFAULT_BOLD
+            })
+        })
+        content.addView(TextView(this).apply {
+            text = "CLASSIC 8-BIT NES ENGINE · FCEUMM"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+            setPadding(0, dp(2), 0, dp(14))
+        })
+
+        // Game Library card
+        val libCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
+            setPadding(dp(14), dp(14), dp(14), dp(14))
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#171B24"))
-                setStroke(dp(2), Color.parseColor("#2E3444"))
-                cornerRadius = dp(14).toFloat()
+                setColor(Color.parseColor("#101625"))
+                setStroke(dp(1), Color.parseColor("#1E293B"))
+                cornerRadius = dp(16).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         }
-
-        // 90s Molded Cartridge Vent Ridges
-        val ridgeBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(10))
-        }
-        for (i in 0 until 5) {
-            ridgeBar.addView(View(this).apply {
-                background = GradientDrawable().apply {
-                    setColor(if (i == 2) Color.parseColor("#C82333") else Color.parseColor("#2B303E"))
-                    cornerRadius = dp(2).toFloat()
-                }
-                layoutParams = LinearLayout.LayoutParams(dp(28), dp(4)).apply {
-                    setMargins(dp(3), 0, dp(3), 0)
-                }
-            })
-        }
-        deckCard.addView(ridgeBar)
-
-        deckCard.addView(TextView(this).apply {
-            text = "TGK RETRO 4.4"
-            setTextColor(Color.parseColor("#F4F1EA"))
-            textSize = 18f
+        libCard.addView(TextView(this).apply {
+            text = "Game Library"
+            setTextColor(Color.parseColor("#F8FAFC"))
+            textSize = 17f
             typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(10))
         })
-        deckCard.addView(TextView(this).apply {
-            text = "CLASSIC 8-BIT NES ENGINE · FCEUMM"
-            setTextColor(Color.parseColor("#D97706"))
-            textSize = 10f
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            setPadding(0, dp(4), 0, dp(14))
+        val libButtons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        libButtons.addView(outlineButton("📁  Scan Folder", "#A78BFA") {
+            folderPicker.launch(null)
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) }
         })
-
-        val buttonRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-        }
-        buttonRow.addView(makeDrawerButton("▶  INSERT .NES CARTRIDGE", "#C82333") {
+        libButtons.addView(outlineButton("📄  Pick .nes File", "#22D3EE") {
             romPicker.launch(arrayOf("*/*"))
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(8) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        buttonRow.addView(makeDrawerButton("🌐  2P ONLINE", "#2A2215") {
+        libCard.addView(libButtons)
+        libraryContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        libCard.addView(libraryContainer)
+        content.addView(libCard)
+        renderLibrary()
+
+        // Play Now
+        content.addView(Button(this).apply {
+            text = "▶  Play Now"
+            isAllCaps = false
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#04111A"))
+            stateListAnimator = null
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#22D3EE"))
+                cornerRadius = dp(14).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(52)
+            ).apply { topMargin = dp(14) }
+            setOnClickListener { launchSelectedGame() }
+        })
+
+        val secondRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(10) }
+        }
+        secondRow.addView(outlineButton("🌐  2P Online", "#22D3EE") {
             showOnlineMultiplayerDialog()
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(8) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) }
         })
-        buttonRow.addView(makeDrawerButton("▶  YT HUB", "#2B171B") {
+        secondRow.addView(outlineButton("▶  YT Hub", "#F43F5E") {
             showYouTubeCreatorHubDialog()
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(8) }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(6) }
         })
-        buttonRow.addView(makeDrawerButton("⚙  SETTINGS", "#232732") {
+        secondRow.addView(outlineButton("⚙  Settings", "#94A3B8") {
             showSettingsDialog()
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        deckCard.addView(buttonRow)
+        content.addView(secondRow)
 
         val aiPreviewBtn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(9), dp(12), dp(9))
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#111B1F"))
+                setColor(Color.parseColor("#0B1618"))
                 setStroke(dp(1), Color.parseColor("#34D399"))
-                cornerRadius = dp(8).toFloat()
+                cornerRadius = dp(12).toFloat()
             }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(10)
-            }
+            ).apply { topMargin = dp(12) }
             isClickable = true
             isFocusable = true
             setOnClickListener { showAiGamerComingSoonDialog() }
@@ -2210,23 +2515,24 @@ class MainActivity : AppCompatActivity() {
         })
         aiPreviewBtn.addView(TextView(this).apply {
             text = "2P AI Partner · Live Banter · 1P & 2P Smart Guide · India Retro Edition"
-            setTextColor(Color.parseColor("#A5A097"))
+            setTextColor(Color.parseColor("#94A3B8"))
             textSize = 10f
             gravity = Gravity.CENTER
             setPadding(0, dp(2), 0, 0)
         })
-        deckCard.addView(aiPreviewBtn)
+        content.addView(aiPreviewBtn)
 
-        deckCard.addView(TextView(this).apply {
+        content.addView(TextView(this).apply {
             text = "USB/BT Gamepad Ready · R1/X = Turbo A · L1/Y = Turbo B · Per-Game Layouts"
-            setTextColor(Color.parseColor("#8E8A82"))
+            setTextColor(Color.parseColor("#64748B"))
             textSize = 10f
             typeface = Typeface.MONOSPACE
             gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, 0)
+            setPadding(0, dp(12), 0, 0)
         })
 
-        shelf.addView(deckCard)
+        scroll.addView(content)
+        shelf.addView(scroll)
         return shelf
     }
 
@@ -2759,3 +3065,5 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }
+
+private const val LIBRARY_PAGE = 60
