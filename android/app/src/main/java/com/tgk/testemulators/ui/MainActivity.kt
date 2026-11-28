@@ -826,7 +826,7 @@ class MainActivity : AppCompatActivity() {
             typeface = Typeface.DEFAULT_BOLD
         })
         root.addView(TextView(this).apply {
-            text = "TGK RETRO 4.4 · FCEUmm · saved automatically"
+            text = "TGK RETRO 4.4 · FCEUmm · $BUILD_LABEL"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 10f
             typeface = Typeface.MONOSPACE
@@ -2792,7 +2792,7 @@ class MainActivity : AppCompatActivity() {
             })
         })
         content.addView(TextView(this).apply {
-            text = "CLASSIC 8-BIT NES ENGINE · FCEUMM"
+            text = "CLASSIC 8-BIT NES ENGINE · FCEUMM · $BUILD_LABEL"
             setTextColor(Color.parseColor("#94A3B8"))
             textSize = 10f
             typeface = Typeface.MONOSPACE
@@ -3458,3 +3458,6 @@ class MainActivity : AppCompatActivity() {
 }
 
 private const val LIBRARY_PAGE = 60
+
+/** Shown on the home screen and in Settings so it is obvious which APK is installed. */
+private const val BUILD_LABEL = "build: gamepad-map"
