@@ -513,6 +513,28 @@ class MainActivity : AppCompatActivity() {
         }.getOrNull()
     }
 
+    // Self-diagnostics for "ROM loads but does not play": counted by the emulation loop.
+    @Volatile private var diagLoopTicks = 0
+    @Volatile private var diagVideoFrames = 0
+    @Volatile private var diagSawPicture = false
+
+    private fun scheduleGameHealthCheck(title: String) {
+        diagLoopTicks = 0
+        diagVideoFrames = 0
+        diagSawPicture = false
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (!emulatorCore.isRomLoaded || onlineSessionActive) return@postDelayed
+            if (emulatorCore.state != EmulatorState.RUNNING) return@postDelayed
+            val msg = when {
+                diagLoopTicks == 0 -> "$title loaded but the emulation loop is not running (state ${emulatorCore.state})"
+                diagVideoFrames == 0 -> "$title loaded but the core produced no video frames (ticks=$diagLoopTicks)"
+                !diagSawPicture -> "$title is running ($diagVideoFrames frames) but the picture is all black"
+                else -> null
+            }
+            if (msg != null) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        }, 2000L)
+    }
+
     private fun loadRomFromUri(uri: Uri) {
         var fileName = resolveDisplayName(uri)
         var bytes = runCatching {
@@ -571,6 +593,7 @@ class MainActivity : AppCompatActivity() {
             updateNetplayHud()
         }
         startEmulationLoop()
+        scheduleGameHealthCheck(cleanTitle)
     }
 
     private fun loadRomFromBytes(bytes: ByteArray, fileName: String, autoRun: Boolean = true): Boolean {
@@ -1972,8 +1995,19 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else if (emulatorCore.state == EmulatorState.RUNNING && emulatorCore.isRomLoaded) {
                     turboController.tickFrame()
-                    emulatorCore.stepFrame(frameBuffer)
+                    val gotVideo = emulatorCore.stepFrame(frameBuffer)
                     surfaceView.renderFrame(frameBuffer)
+                    diagLoopTicks += 1
+                    if (gotVideo) {
+                        diagVideoFrames += 1
+                        if (!diagSawPicture && diagVideoFrames % 15 == 1) {
+                            var i = 0
+                            while (i < frameBuffer.size) {
+                                if ((frameBuffer[i] and 0x00FFFFFF) != 0) { diagSawPicture = true; break }
+                                i += 97
+                            }
+                        }
+                    }
                     championsEngine.onFrameAdvanced { unlocked ->
                         runOnUiThread {
                             Toast.makeText(
