@@ -668,7 +668,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectedGamepadNames(): List<String> =
-        android.view.InputDevice.getDeviceIds().mapNotNull { id ->
+        android.view.InputDevice.getDeviceIds().toList().mapNotNull { id ->
             val d = android.view.InputDevice.getDevice(id) ?: return@mapNotNull null
             val pad = (d.sources and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
                 (d.sources and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK
