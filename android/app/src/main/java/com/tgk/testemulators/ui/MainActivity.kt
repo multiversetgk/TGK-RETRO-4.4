@@ -43,6 +43,7 @@ import com.tgk.testemulators.champions.LocalNesRomLibrary
 import com.tgk.testemulators.champions.SessionMode
 import com.tgk.testemulators.creator.CreatorHubRepository
 import com.tgk.testemulators.input.DualPortInputController
+import com.tgk.testemulators.input.GamepadMappingStore
 import com.tgk.testemulators.input.TurboController
 import com.tgk.testemulators.library.GameLibraryStore
 import com.tgk.testemulators.library.LibraryGame
@@ -160,6 +161,7 @@ class MainActivity : AppCompatActivity() {
     private var emulationThread: Thread? = null
 
     private lateinit var libraryStore: GameLibraryStore
+    private val gamepadMap by lazy { GamepadMappingStore(applicationContext) }
     private var libraryContainer: LinearLayout? = null
     private var selectedLibraryUri: String? = null
 
@@ -212,7 +214,8 @@ class MainActivity : AppCompatActivity() {
             onTurboButtonChanged = { port, button, held ->
                 if (held) championsEngine.recordTurboOrCheat("Gamepad Turbo ${button.label}")
                 turboController.setTurboHeld(port, button, held)
-            }
+            },
+            keyMap = gamepadMap
         )
         settingsRepo = EmulatorSettingsRepository(applicationContext)
         highlightRepo = HighlightBookmarkRepository(applicationContext)
@@ -664,6 +667,144 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun connectedGamepadNames(): List<String> =
+        android.view.InputDevice.getDeviceIds().mapNotNull { id ->
+            val d = android.view.InputDevice.getDevice(id) ?: return@mapNotNull null
+            val pad = (d.sources and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
+                (d.sources and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK
+            if (pad && !d.isVirtual) d.name else null
+        }
+
+    /** Remap controller buttons: tap a NES button, then press the physical button you want on the controller. */
+    private fun showControllerMappingDialog() {
+        val root = darkDialogRoot()
+        root.addView(TextView(this).apply {
+            text = "Controller Mapping"
+            setTextColor(Color.parseColor("#F8FAFC"))
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        val pads = connectedGamepadNames()
+        root.addView(TextView(this).apply {
+            text = if (pads.isEmpty()) "No controller detected. Plug in a USB/OTG pad or pair a Bluetooth pad."
+            else "Connected: " + pads.joinToString(", ")
+            setTextColor(Color.parseColor(if (pads.isEmpty()) "#FCD34D" else "#34D399"))
+            textSize = 11f
+            setPadding(0, dp(2), 0, dp(10))
+        })
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        var mapDialog: AlertDialog? = null
+
+        fun renderRows() {
+            list.removeAllViews()
+            NesButton.values().forEach { nes ->
+                list.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(11), dp(12), dp(11))
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor("#0B1020"))
+                        setStroke(dp(1), Color.parseColor("#1E293B"))
+                        cornerRadius = dp(10).toFloat()
+                    }
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(6) }
+                    isClickable = true
+                    setOnClickListener { captureControllerKey(nes) { renderRows() } }
+                    addView(TextView(this@MainActivity).apply {
+                        text = "NES ${nes.label}"
+                        setTextColor(Color.parseColor("#F8FAFC"))
+                        textSize = 13f
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+                    addView(TextView(this@MainActivity).apply {
+                        text = GamepadMappingStore.keyName(gamepadMap.keyFor(nes))
+                        setTextColor(Color.parseColor("#22D3EE"))
+                        textSize = 12f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(dp(10), dp(4), dp(10), dp(4))
+                        background = GradientDrawable().apply {
+                            setColor(Color.parseColor("#0F1B2E"))
+                            setStroke(dp(1), Color.parseColor("#164E63"))
+                            cornerRadius = dp(8).toFloat()
+                        }
+                    })
+                })
+            }
+        }
+        renderRows()
+        root.addView(ScrollView(this).apply {
+            addView(list)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.45f).toInt()
+            )
+        })
+        root.addView(TextView(this).apply {
+            text = "Turbo stays on R1/X (A) and L1/Y (B) unless you map those keys above. Mapping is saved."
+            setTextColor(Color.parseColor("#64748B"))
+            textSize = 10f
+            setPadding(0, dp(6), 0, dp(6))
+        })
+        root.addView(outlineButton("↺  Reset to default", "#F59E0B") {
+            gamepadMap.resetDefaults()
+            renderRows()
+            Toast.makeText(this, "Controller mapping reset", Toast.LENGTH_SHORT).show()
+        })
+        root.addView(outlineButton("Done", "#22D3EE") { mapDialog?.dismiss() }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(6) }
+        })
+        mapDialog = showStyledDialog(root)
+    }
+
+    private fun captureControllerKey(nes: NesButton, onDone: () -> Unit) {
+        val box = darkDialogRoot().apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Press the controller button\nfor NES ${nes.label}"
+                setTextColor(Color.parseColor("#F8FAFC"))
+                textSize = 17f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(16), dp(8), dp(8))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Waiting for input…  (tap outside to cancel)"
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 11f
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, dp(12))
+            })
+        }
+        val d = showStyledDialog(box)
+        d.setOnKeyListener { dlg, keyCode, event ->
+            val isPadKey = (event.source and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
+                (event.source and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK ||
+                (event.source and android.view.InputDevice.SOURCE_DPAD) == android.view.InputDevice.SOURCE_DPAD
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+                keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_VOLUME_UP &&
+                keyCode != KeyEvent.KEYCODE_VOLUME_DOWN && (isPadKey || keyCode in KeyEvent.KEYCODE_BUTTON_A..KeyEvent.KEYCODE_BUTTON_MODE)
+            ) {
+                gamepadMap.assign(nes, keyCode)
+                dlg.dismiss()
+                Toast.makeText(
+                    this,
+                    "NES ${nes.label} = ${GamepadMappingStore.keyName(keyCode)}",
+                    Toast.LENGTH_SHORT
+                ).show()
+                onDone()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
     private fun <T> nextOf(values: Array<T>, current: T): T =
         values[(values.indexOf(current) + 1) % values.size]
 
@@ -843,6 +984,10 @@ class MainActivity : AppCompatActivity() {
                         val scales = floatArrayOf(0.85f, 1.0f, 1.15f)
                         val curIdx = scales.indexOfFirst { kotlin.math.abs(it - gameLayout.buttonScale) < 0.05f }.coerceAtLeast(0)
                         gameLayout = gameLayout.copy(buttonScale = scales[(curIdx + 1) % scales.size]); saveLayout()
+                    }
+                    action("🎮  Controller Mapping (USB / OTG / Bluetooth)", "#22D3EE") {
+                        dialog.dismiss()
+                        showControllerMappingDialog()
                     }
                     action("✥  Drag & Reposition On-Screen Pad", "#A78BFA") {
                         dialog.dismiss()

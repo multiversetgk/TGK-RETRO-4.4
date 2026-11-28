@@ -15,7 +15,8 @@ import kotlin.math.abs
 class DualPortInputController(
     private val core: IEmulatorCore,
     private val onLocalButtonChanged: ((PlayerPort, NesButton, Boolean) -> Unit)? = null,
-    private val onTurboButtonChanged: ((PlayerPort, NesButton, Boolean) -> Unit)? = null
+    private val onTurboButtonChanged: ((PlayerPort, NesButton, Boolean) -> Unit)? = null,
+    private val keyMap: GamepadMappingStore? = null
 ) {
     private val deviceToPort = LinkedHashMap<Int, PlayerPort>()
     private val hatState = mutableMapOf<PlayerPort, IntArray>() // [dx, dy]
@@ -59,7 +60,7 @@ class DualPortInputController(
 
         if (isGamepad) {
             val port = onlineLockedPort ?: resolveGamepadPort(event.deviceId)
-            val turboTarget = mapGamepadTurboKeyCode(event.keyCode)
+            val turboTarget = if (keyMap?.buttonFor(event.keyCode) != null) null else mapGamepadTurboKeyCode(event.keyCode)
             if (turboTarget != null) {
                 onTurboButtonChanged?.invoke(port, turboTarget, pressed)
                 return true
@@ -171,7 +172,10 @@ class DualPortInputController(
         else -> null
     }
 
-    private fun mapGamepadKeyCode(keyCode: Int): NesButton? = when (keyCode) {
+    private fun mapGamepadKeyCode(keyCode: Int): NesButton? =
+        if (keyMap != null) keyMap.buttonFor(keyCode) else defaultGamepadKeyCode(keyCode)
+
+    private fun defaultGamepadKeyCode(keyCode: Int): NesButton? = when (keyCode) {
         KeyEvent.KEYCODE_BUTTON_A -> NesButton.A
         KeyEvent.KEYCODE_BUTTON_B -> NesButton.B
         KeyEvent.KEYCODE_BUTTON_START -> NesButton.START
