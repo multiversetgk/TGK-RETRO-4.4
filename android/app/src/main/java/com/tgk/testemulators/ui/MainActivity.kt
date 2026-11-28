@@ -1534,6 +1534,66 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun darkDialogRoot(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(16), dp(16), dp(12))
+        background = GradientDrawable().apply {
+            setColor(Color.parseColor("#101625"))
+            setStroke(dp(1), Color.parseColor("#1E293B"))
+            cornerRadius = dp(18).toFloat()
+        }
+    }
+
+    private fun darkInput(hintText: String, initial: String): EditText = EditText(this).apply {
+        hint = hintText
+        setText(initial)
+        setTextColor(Color.parseColor("#F8FAFC"))
+        setHintTextColor(Color.parseColor("#64748B"))
+        textSize = 13f
+        setSingleLine(true)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = GradientDrawable().apply {
+            setColor(Color.parseColor("#0B1020"))
+            setStroke(dp(1), Color.parseColor("#1E293B"))
+            cornerRadius = dp(10).toFloat()
+        }
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(8) }
+    }
+
+    private fun statCard(label: String, value: String, colorHex: String): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+        background = GradientDrawable().apply {
+            setColor(Color.parseColor("#0B1020"))
+            setStroke(dp(1), Color.parseColor("#1E293B"))
+            cornerRadius = dp(10).toFloat()
+        }
+        addView(TextView(this@MainActivity).apply {
+            text = label.uppercase()
+            setTextColor(Color.parseColor("#64748B"))
+            textSize = 9f
+            typeface = Typeface.MONOSPACE
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = value
+            setTextColor(Color.parseColor(colorHex))
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+    }
+
+    private fun showStyledDialog(root: View): AlertDialog {
+        val dialog = AlertDialog.Builder(this).setView(root).create()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
+        return dialog
+    }
+
     private fun showOnlineMultiplayerDialog() {
         if (onlineSessionActive && netplayClient.roomCode != null) {
             showActiveOnlineRoomDialog()
@@ -1544,85 +1604,108 @@ class MainActivity : AppCompatActivity() {
             ?: "ws://192.168.1.100:3000/ws/netplay"
         val savedName = netplayPrefs.getString("player_name", "Android Player") ?: "Android Player"
 
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(12), dp(20), dp(4))
-        }
-        container.addView(TextView(this).apply {
-            text = "2-Player Online NES Multiplayer\n" +
-                "Play with a friend using room codes and synced controllers. " +
-                "Wi-Fi or mobile latency may affect smoothness."
+        val root = darkDialogRoot()
+        root.addView(TextView(this).apply {
+            text = "2P Online"
+            setTextColor(Color.parseColor("#F8FAFC"))
+            textSize = 20f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        root.addView(TextView(this).apply {
+            text = "Host a room or join a friend with a room code. Wi-Fi or mobile latency may affect smoothness."
+            setTextColor(Color.parseColor("#94A3B8"))
             textSize = 11f
-            setPadding(0, 0, 0, dp(8))
+            setPadding(0, dp(2), 0, dp(12))
         })
 
-        val wsUrlInput = EditText(this).apply {
-            hint = "Server Address (wss://... or ws://LAN_IP:3000/ws/netplay)"
-            setText(savedUrl)
-        }
-        val nameInput = EditText(this).apply {
-            hint = "Player Name"
-            setText(savedName)
-        }
-        val roomCodeInput = EditText(this).apply {
-            hint = "Room Code (e.g. TGK48)"
-            setText(pendingDeepLinkRoomCode ?: "")
-        }
+        val wsUrlInput = darkInput("Server (wss://... or ws://LAN_IP:3000/ws/netplay)", savedUrl)
+        val nameInput = darkInput("Player Name", savedName)
+        val roomCodeInput = darkInput("Room Code (e.g. TGK48)", pendingDeepLinkRoomCode ?: "")
         val turnBasedBox = CheckBox(this).apply {
             text = "Turn-Based Mode (share Player 1)"
+            setTextColor(Color.parseColor("#CBD5E1"))
+            textSize = 12f
             isChecked = false
         }
+        root.addView(wsUrlInput)
+        root.addView(nameInput)
+        root.addView(roomCodeInput)
+        root.addView(turnBasedBox)
 
-        container.addView(wsUrlInput)
-        container.addView(nameInput)
-        container.addView(roomCodeInput)
-        container.addView(turnBasedBox)
+        var dialog: AlertDialog? = null
 
-        AlertDialog.Builder(this)
-            .setTitle("Online NES Multiplayer")
-            .setView(container)
-            .setPositiveButton("Host Room (P1)") { _, _ ->
-                val url = wsUrlInput.text.toString().trim()
-                val name = nameInput.text.toString().trim().ifEmpty { "Player 1" }
-                lastOnlineUrl = url
-                lastOnlinePlayerName = name
-                lastOnlineWasHost = true
-                lastOnlineTurnBased = turnBasedBox.isChecked
-                netplayPrefs.edit().putString("ws_url", url).putString("player_name", name).apply()
-                val handshake = buildLocalHandshake()
-                if (handshake == null) {
-                    Toast.makeText(this, "Pick a .nes game first before hosting a room", Toast.LENGTH_LONG).show()
-                    return@setPositiveButton
-                }
-                netplayClient.connectAndCreateRoom(
-                    wsUrl = url,
-                    playerName = name,
-                    handshake = handshake,
-                    listener = createNetplayListener(),
-                    mode = "shared-2p",
-                    turnBasedSharedPort1 = turnBasedBox.isChecked
-                )
+        fun doHost() {
+            val url = wsUrlInput.text.toString().trim()
+            val name = nameInput.text.toString().trim().ifEmpty { "Player 1" }
+            lastOnlineUrl = url
+            lastOnlinePlayerName = name
+            lastOnlineWasHost = true
+            lastOnlineTurnBased = turnBasedBox.isChecked
+            netplayPrefs.edit().putString("ws_url", url).putString("player_name", name).apply()
+            val handshake = buildLocalHandshake()
+            if (handshake == null) {
+                Toast.makeText(this, "Pick a .nes game first before hosting a room", Toast.LENGTH_LONG).show()
+                return
             }
-            .setNeutralButton("Join Room (P2)") { _, _ ->
-                val url = wsUrlInput.text.toString().trim()
-                val name = nameInput.text.toString().trim().ifEmpty { "Player 2" }
-                val code = roomCodeInput.text.toString().trim()
-                lastOnlineUrl = url
-                lastOnlinePlayerName = name
-                lastOnlineWasHost = false
-                lastOnlineRoomCode = code
-                pendingDeepLinkRoomCode = null
-                netplayPrefs.edit().putString("ws_url", url).putString("player_name", name).apply()
-                netplayClient.connectAndJoinRoom(
-                    wsUrl = url,
-                    roomCode = code,
-                    playerName = name,
-                    handshake = buildLocalHandshake(),
-                    listener = createNetplayListener()
-                )
+            dialog?.dismiss()
+            netplayClient.connectAndCreateRoom(
+                wsUrl = url,
+                playerName = name,
+                handshake = handshake,
+                listener = createNetplayListener(),
+                mode = "shared-2p",
+                turnBasedSharedPort1 = turnBasedBox.isChecked
+            )
+        }
+
+        fun doJoin() {
+            val url = wsUrlInput.text.toString().trim()
+            val name = nameInput.text.toString().trim().ifEmpty { "Player 2" }
+            val code = roomCodeInput.text.toString().trim()
+            lastOnlineUrl = url
+            lastOnlinePlayerName = name
+            lastOnlineWasHost = false
+            lastOnlineRoomCode = code
+            pendingDeepLinkRoomCode = null
+            netplayPrefs.edit().putString("ws_url", url).putString("player_name", name).apply()
+            dialog?.dismiss()
+            netplayClient.connectAndJoinRoom(
+                wsUrl = url,
+                roomCode = code,
+                playerName = name,
+                handshake = buildLocalHandshake(),
+                listener = createNetplayListener()
+            )
+        }
+
+        root.addView(Button(this).apply {
+            text = "Host Room (P1)"
+            isAllCaps = false
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.parseColor("#04111A"))
+            stateListAnimator = null
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#22D3EE"))
+                cornerRadius = dp(12).toFloat()
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(10) }
+            setOnClickListener { doHost() }
+        })
+        root.addView(outlineButton("Join Room (P2)", "#A78BFA") { doJoin() }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        })
+        root.addView(outlineButton("Cancel", "#94A3B8") { dialog?.dismiss() }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        })
+
+        dialog = showStyledDialog(ScrollView(this).apply { addView(root) })
     }
 
     private fun showActiveOnlineRoomDialog() {
@@ -1650,17 +1733,7 @@ class MainActivity : AppCompatActivity() {
         }
         actions.add("Leave Online Room")
 
-        val summary = "Room: $code · ${port.label} · Players: $onlinePeerCount/2\n" +
-            "Core: FCEUmm · Verified: ${if (onlinePeerVerified) "YES" else "PENDING"}\n" +
-            "Game: ${romMeta?.title ?: "Not loaded"}\n" +
-            "Ping: ${m.pingMs ?: "--"}ms · Quality: ${m.quality.label}\n" +
-            "Status: $onlineStatusMessage"
-
-        AlertDialog.Builder(this)
-            .setTitle("TGK RETRO 4.4 · Room $code")
-            .setItems(arrayOf(summary) + actions.toTypedArray()) { _, which ->
-                if (which == 0) return@setItems
-                val chosen = actions[which - 1]
+        fun perform(chosen: String) {
                 when {
                     chosen.startsWith("Copy Room Code") -> {
                         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -1751,9 +1824,83 @@ class MainActivity : AppCompatActivity() {
                     }
                     chosen == "Leave Online Room" -> leaveOnlineRoom(silent = false)
                 }
+        }
+
+        val root = darkDialogRoot()
+        root.addView(TextView(this).apply {
+            text = "TGK RETRO 4.4 · ROOM"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+        })
+        root.addView(TextView(this).apply {
+            text = code
+            setTextColor(Color.parseColor("#22D3EE"))
+            textSize = 30f
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+            setPadding(0, 0, 0, dp(10))
+        })
+
+        fun statRow(a: LinearLayout, b: LinearLayout) {
+            root.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+                a.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(3) }
+                b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(3) }
+                addView(a)
+                addView(b)
+            })
+        }
+        statRow(
+            statCard("You", port.label, "#F8FAFC"),
+            statCard("Players", "$onlinePeerCount/2", if (onlinePeerCount >= 2) "#34D399" else "#FCD34D")
+        )
+        statRow(
+            statCard("Ping", "${m.pingMs ?: "--"} ms", "#F8FAFC"),
+            statCard("Quality", m.quality.label, "#22D3EE")
+        )
+        statRow(
+            statCard("Verified", if (onlinePeerVerified) "YES" else "PENDING", if (onlinePeerVerified) "#34D399" else "#FCD34D"),
+            statCard("Core", "FCEUmm", "#A78BFA")
+        )
+        root.addView(statCard("Game", romMeta?.title ?: "Not loaded", "#F8FAFC").apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+        })
+        root.addView(TextView(this).apply {
+            text = "Status: $onlineStatusMessage"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 11f
+            setPadding(0, dp(2), 0, dp(10))
+        })
+
+        var dialog: AlertDialog? = null
+        actions.forEach { label ->
+            val color = when {
+                label == "Leave Online Room" -> "#F43F5E"
+                label.startsWith("Copy") || label.startsWith("Share") -> "#22D3EE"
+                label.startsWith("Synchronized") -> "#34D399"
+                label.startsWith("Force") || label.startsWith("Offer") -> "#F59E0B"
+                else -> "#A78BFA"
             }
-            .setNegativeButton("Close", null)
-            .show()
+            root.addView(outlineButton(label, color) {
+                dialog?.dismiss()
+                perform(label)
+            }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            })
+        }
+        root.addView(outlineButton("Close", "#94A3B8") { dialog?.dismiss() })
+        dialog = showStyledDialog(ScrollView(this).apply { addView(root) })
     }
 
     private val inputDeviceListener = object : android.hardware.input.InputManager.InputDeviceListener {
