@@ -641,176 +641,241 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSettingsDialog() {
-        val sections = arrayOf(
-            "1. Display & Screen (Video Size, Filter, CRT)",
-            "2. Controls & Layout (D-Pad / Stick, Turbo, Scale)",
-            "3. Gameplay & Saves (Save Slots, Audio Focus)",
-            "4. Timer & Usage Reports (${formatTimerClock(sessionElapsedSeconds)} live)"
-        )
-        AlertDialog.Builder(this)
-            .setTitle("TGK Retro Settings")
-            .setItems(sections) { _, which ->
-                when (which) {
-                    0 -> showDisplaySettingsDialog()
-                    1 -> showControlsSettingsDialog()
-                    2 -> showGameplaySavesSettingsDialog()
-                    3 -> showUsageReportsDialog()
-                }
-            }
-            .setPositiveButton("Done", null)
-            .show()
-    }
+    private fun <T> nextOf(values: Array<T>, current: T): T =
+        values[(values.indexOf(current) + 1) % values.size]
 
-    private fun showDisplaySettingsDialog() {
-        val ratios = ScreenAspectRatio.values()
-        val orientations = ScreenOrientationMode.values()
-        val filters = VideoFilterMode.values()
-        val crts = CrtDisplayMode.values()
-        val options = arrayOf(
-            "Video Size: ${emuSettings.aspectRatio.label}",
-            "Orientation: ${emuSettings.orientationMode.label}",
-            "Video Filter: ${emuSettings.videoFilter.label}",
-            "CRT Display: ${emuSettings.crtMode.label}"
-        )
-        AlertDialog.Builder(this)
-            .setTitle("Display & Screen")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> {
-                        val next = ratios[(ratios.indexOf(emuSettings.aspectRatio) + 1) % ratios.size]
-                        emuSettings = emuSettings.copy(aspectRatio = next)
-                    }
-                    1 -> {
-                        val next = orientations[(orientations.indexOf(emuSettings.orientationMode) + 1) % orientations.size]
-                        emuSettings = emuSettings.copy(orientationMode = next)
-                    }
-                    2 -> {
-                        val next = filters[(filters.indexOf(emuSettings.videoFilter) + 1) % filters.size]
-                        emuSettings = emuSettings.copy(videoFilter = next)
-                    }
-                    3 -> {
-                        val next = crts[(crts.indexOf(emuSettings.crtMode) + 1) % crts.size]
-                        emuSettings = emuSettings.copy(crtMode = next)
-                    }
-                }
-                settingsRepo.saveEmulatorSettings(emuSettings)
-                applyEmulatorSettings()
-                showDisplaySettingsDialog()
+    /** Premium 4-tab Emulator Settings: Display / Controls / Gameplay / Timer (same options as before). */
+    private fun showSettingsDialog(initialTab: Int = 0) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(12))
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#101625"))
+                setStroke(dp(1), Color.parseColor("#1E293B"))
+                cornerRadius = dp(18).toFloat()
             }
-            .setNegativeButton("Back") { _, _ -> showSettingsDialog() }
-            .show()
-    }
+        }
+        root.addView(TextView(this).apply {
+            text = "Emulator Settings"
+            setTextColor(Color.parseColor("#F8FAFC"))
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        root.addView(TextView(this).apply {
+            text = "TGK RETRO 4.4 · FCEUmm · saved automatically"
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(2), 0, dp(10))
+        })
+        val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        root.addView(tabRow)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        val maxH = (resources.displayMetrics.heightPixels * 0.5f).toInt()
+        root.addView(ScrollView(this).apply {
+            addView(body)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, maxH)
+        })
+        val dialog = AlertDialog.Builder(this).setView(root).create()
+        root.addView(outlineButton("Done", "#22D3EE") { dialog.dismiss() }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        })
 
-    private fun showControlsSettingsDialog() {
-        val turbos = intArrayOf(5, 10, 15, 20, 30)
-        val options = arrayOf(
-            "Control Style: ${gameLayout.stickMode.label}",
-            "Turbo Rapid-Fire: ${emuSettings.turboRateHz} Hz",
-            "Button Scale: ${(gameLayout.buttonScale * 100).toInt()}%",
-            "Drag & Reposition On-Screen Pad",
-            "Reset Layout Profile"
-        )
-        AlertDialog.Builder(this)
-            .setTitle("Controls & Layout")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> {
-                        val nextStick = if (gameLayout.stickMode == StickControlMode.DPAD) {
-                            StickControlMode.THUMBSTICK
-                        } else {
-                            StickControlMode.DPAD
+        var current = initialTab.coerceIn(0, 3)
+        val tabNames = listOf("Display", "Controls", "Gameplay", "Timer")
+
+        fun sectionTitle(text: String) = body.addView(TextView(this).apply {
+            this.text = text
+            setTextColor(Color.parseColor("#A78BFA"))
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            setPadding(0, dp(2), 0, dp(6))
+        })
+
+        fun rowView(label: String, value: String?, onClick: (() -> Unit)?): LinearLayout =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(11), dp(12), dp(11))
+                background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#0B1020"))
+                    setStroke(dp(1), Color.parseColor("#1E293B"))
+                    cornerRadius = dp(10).toFloat()
+                }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+                addView(TextView(this@MainActivity).apply {
+                    text = label
+                    setTextColor(Color.parseColor("#F8FAFC"))
+                    textSize = 13f
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                if (value != null) {
+                    addView(TextView(this@MainActivity).apply {
+                        text = value
+                        setTextColor(Color.parseColor("#22D3EE"))
+                        textSize = 12f
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(dp(10), dp(4), dp(10), dp(4))
+                        background = GradientDrawable().apply {
+                            setColor(Color.parseColor("#0F1B2E"))
+                            setStroke(dp(1), Color.parseColor("#164E63"))
+                            cornerRadius = dp(8).toFloat()
                         }
-                        gameLayout = gameLayout.copy(stickMode = nextStick)
-                        settingsRepo.saveGameLayout(gameLayout)
-                        applyGameLayout()
-                        showControlsSettingsDialog()
+                    })
+                }
+                if (onClick != null) {
+                    isClickable = true
+                    setOnClickListener { onClick() }
+                }
+            }
+
+        lateinit var renderTab: (Int) -> Unit
+
+        fun choice(label: String, value: String, change: () -> Unit) =
+            body.addView(rowView(label, value) { change(); renderTab(current) })
+
+        fun action(label: String, colorHex: String, run: () -> Unit) {
+            body.addView(outlineButton(label, colorHex) { run() }.apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) }
+            })
+        }
+
+        fun saveEmu() {
+            settingsRepo.saveEmulatorSettings(emuSettings)
+            applyEmulatorSettings()
+        }
+
+        fun saveLayout() {
+            settingsRepo.saveGameLayout(gameLayout)
+            applyGameLayout()
+        }
+
+        renderTab = { index ->
+            current = index
+            tabRow.removeAllViews()
+            tabNames.forEachIndexed { i, name ->
+                val on = i == index
+                tabRow.addView(Button(this).apply {
+                    text = name
+                    isAllCaps = false
+                    textSize = 11f
+                    typeface = Typeface.DEFAULT_BOLD
+                    stateListAnimator = null
+                    minWidth = 0
+                    minimumWidth = 0
+                    setPadding(dp(4), dp(8), dp(4), dp(8))
+                    setTextColor(Color.parseColor(if (on) "#04111A" else "#94A3B8"))
+                    background = GradientDrawable().apply {
+                        setColor(Color.parseColor(if (on) "#22D3EE" else "#0B1020"))
+                        setStroke(dp(1), Color.parseColor(if (on) "#22D3EE" else "#1E293B"))
+                        cornerRadius = dp(10).toFloat()
                     }
-                    1 -> {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(38), 1f).apply {
+                        if (i > 0) marginStart = dp(5)
+                    }
+                    setOnClickListener { renderTab(i) }
+                })
+            }
+            body.removeAllViews()
+            when (index) {
+                0 -> {
+                    sectionTitle("DISPLAY & SCREEN")
+                    choice("Video Size", emuSettings.aspectRatio.label) {
+                        emuSettings = emuSettings.copy(aspectRatio = nextOf(ScreenAspectRatio.values(), emuSettings.aspectRatio)); saveEmu()
+                    }
+                    choice("Orientation", emuSettings.orientationMode.label) {
+                        emuSettings = emuSettings.copy(orientationMode = nextOf(ScreenOrientationMode.values(), emuSettings.orientationMode)); saveEmu()
+                    }
+                    choice("Video Filter", emuSettings.videoFilter.label) {
+                        emuSettings = emuSettings.copy(videoFilter = nextOf(VideoFilterMode.values(), emuSettings.videoFilter)); saveEmu()
+                    }
+                    choice("CRT Display", emuSettings.crtMode.label) {
+                        emuSettings = emuSettings.copy(crtMode = nextOf(CrtDisplayMode.values(), emuSettings.crtMode)); saveEmu()
+                    }
+                }
+                1 -> {
+                    sectionTitle("CONTROLS & LAYOUT")
+                    choice("Control Style", gameLayout.stickMode.label) {
+                        val nextStick = if (gameLayout.stickMode == StickControlMode.DPAD) StickControlMode.THUMBSTICK else StickControlMode.DPAD
+                        gameLayout = gameLayout.copy(stickMode = nextStick); saveLayout()
+                    }
+                    choice("Turbo Rapid-Fire", "${emuSettings.turboRateHz} Hz") {
+                        val turbos = intArrayOf(5, 10, 15, 20, 30)
                         val idx = turbos.indexOf(emuSettings.turboRateHz).coerceAtLeast(0)
-                        emuSettings = emuSettings.copy(turboRateHz = turbos[(idx + 1) % turbos.size])
-                        settingsRepo.saveEmulatorSettings(emuSettings)
-                        applyEmulatorSettings()
-                        showControlsSettingsDialog()
+                        emuSettings = emuSettings.copy(turboRateHz = turbos[(idx + 1) % turbos.size]); saveEmu()
                     }
-                    2 -> {
+                    choice("Button Scale", "${(gameLayout.buttonScale * 100).toInt()}%") {
                         val scales = floatArrayOf(0.85f, 1.0f, 1.15f)
                         val curIdx = scales.indexOfFirst { kotlin.math.abs(it - gameLayout.buttonScale) < 0.05f }.coerceAtLeast(0)
-                        gameLayout = gameLayout.copy(buttonScale = scales[(curIdx + 1) % scales.size])
-                        settingsRepo.saveGameLayout(gameLayout)
-                        applyGameLayout()
-                        showControlsSettingsDialog()
+                        gameLayout = gameLayout.copy(buttonScale = scales[(curIdx + 1) % scales.size]); saveLayout()
                     }
-                    3 -> enterLayoutEditMode()
-                    4 -> {
+                    action("✥  Drag & Reposition On-Screen Pad", "#A78BFA") {
+                        dialog.dismiss()
+                        enterLayoutEditMode()
+                    }
+                    action("↺  Reset Layout Profile", "#F59E0B") {
                         val hash = emulatorCore.currentRom?.hashHex ?: "default"
                         gameLayout = settingsRepo.resetGameLayout(hash, emuSettings.stickMode)
                         applyGameLayout()
                         Toast.makeText(this, "Layout reset to default", Toast.LENGTH_SHORT).show()
-                        showControlsSettingsDialog()
+                        renderTab(current)
                     }
                 }
-            }
-            .setNegativeButton("Back") { _, _ -> showSettingsDialog() }
-            .show()
-    }
-
-    private fun showGameplaySavesSettingsDialog() {
-        val latencies = intArrayOf(24, 48, 96)
-        val focuses = AudioFocusMode.values()
-        val options = arrayOf(
-            "Quick Save · Slot 1",
-            "Quick Load · Slot 1",
-            "Quick Save · Slot 2",
-            "Quick Load · Slot 2",
-            "Audio Focus: ${emuSettings.audioFocus.label}",
-            "Audio Buffer: ${emuSettings.audioLatencyMs}ms"
-        )
-        AlertDialog.Builder(this)
-            .setTitle("Gameplay & Saves")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> Toast.makeText(this, if (emulatorCore.quickSaveState(1)) "Saved Slot 1" else "Load a game first", Toast.LENGTH_SHORT).show()
-                    1 -> Toast.makeText(this, if (emulatorCore.quickLoadState(1)) "Loaded Slot 1" else "Slot 1 empty", Toast.LENGTH_SHORT).show()
-                    2 -> Toast.makeText(this, if (emulatorCore.quickSaveState(2)) "Saved Slot 2" else "Load a game first", Toast.LENGTH_SHORT).show()
-                    3 -> Toast.makeText(this, if (emulatorCore.quickLoadState(2)) "Loaded Slot 2" else "Slot 2 empty", Toast.LENGTH_SHORT).show()
-                    4 -> {
-                        val next = focuses[(focuses.indexOf(emuSettings.audioFocus) + 1) % focuses.size]
-                        emuSettings = emuSettings.copy(audioFocus = next)
-                        settingsRepo.saveEmulatorSettings(emuSettings)
-                        applyEmulatorSettings()
+                2 -> {
+                    sectionTitle("SAVE STATES")
+                    action("Quick Save · Slot 1", "#22D3EE") {
+                        Toast.makeText(this, if (emulatorCore.quickSaveState(1)) "Saved Slot 1" else "Load a game first", Toast.LENGTH_SHORT).show()
                     }
-                    5 -> {
+                    action("Quick Load · Slot 1", "#22D3EE") {
+                        Toast.makeText(this, if (emulatorCore.quickLoadState(1)) "Loaded Slot 1" else "Slot 1 empty", Toast.LENGTH_SHORT).show()
+                    }
+                    action("Quick Save · Slot 2", "#A78BFA") {
+                        Toast.makeText(this, if (emulatorCore.quickSaveState(2)) "Saved Slot 2" else "Load a game first", Toast.LENGTH_SHORT).show()
+                    }
+                    action("Quick Load · Slot 2", "#A78BFA") {
+                        Toast.makeText(this, if (emulatorCore.quickLoadState(2)) "Loaded Slot 2" else "Slot 2 empty", Toast.LENGTH_SHORT).show()
+                    }
+                    sectionTitle("AUDIO")
+                    choice("Audio Focus", emuSettings.audioFocus.label) {
+                        emuSettings = emuSettings.copy(audioFocus = nextOf(AudioFocusMode.values(), emuSettings.audioFocus)); saveEmu()
+                    }
+                    choice("Audio Buffer", "${emuSettings.audioLatencyMs} ms") {
+                        val latencies = intArrayOf(24, 48, 96)
                         val idx = latencies.indexOf(emuSettings.audioLatencyMs).coerceAtLeast(0)
-                        emuSettings = emuSettings.copy(audioLatencyMs = latencies[(idx + 1) % latencies.size])
-                        settingsRepo.saveEmulatorSettings(emuSettings)
-                        applyEmulatorSettings()
+                        emuSettings = emuSettings.copy(audioLatencyMs = latencies[(idx + 1) % latencies.size]); saveEmu()
                     }
                 }
-                showGameplaySavesSettingsDialog()
+                else -> {
+                    sectionTitle("TIMER & USAGE REPORTS")
+                    val totalSeconds = usagePrefs.getInt("total_seconds", 0) + sessionElapsedSeconds
+                    body.addView(rowView("Current Session", formatTimerClock(sessionElapsedSeconds), null))
+                    body.addView(rowView("Total Playtime", formatTimerClock(totalSeconds), null))
+                    body.addView(rowView("Saved Sessions", "${usagePrefs.getInt("total_sessions", 0)}", null))
+                    body.addView(rowView("Last Played", usagePrefs.getString("last_game_name", "None yet") ?: "None yet", null))
+                    action("🗑  Clear Reports", "#F43F5E") {
+                        usagePrefs.edit().clear().apply()
+                        Toast.makeText(this, "Usage reports cleared", Toast.LENGTH_SHORT).show()
+                        renderTab(current)
+                        renderLibrary()
+                    }
+                }
             }
-            .setNegativeButton("Back") { _, _ -> showSettingsDialog() }
-            .show()
-    }
-
-    private fun showUsageReportsDialog() {
-        val totalSeconds = usagePrefs.getInt("total_seconds", 0) + sessionElapsedSeconds
-        val totalSessions = usagePrefs.getInt("total_sessions", 0)
-        val lastGame = usagePrefs.getString("last_game_name", "None yet") ?: "None yet"
-        val reportText = "Current Session: ${formatTimerClock(sessionElapsedSeconds)}\n" +
-            "Total Playtime: ${formatTimerClock(totalSeconds)}\n" +
-            "Saved Sessions: $totalSessions\n" +
-            "Last Played: $lastGame"
-        AlertDialog.Builder(this)
-            .setTitle("Timer & Usage Reports")
-            .setMessage(reportText)
-            .setNeutralButton("Clear Reports") { _, _ ->
-                usagePrefs.edit().clear().apply()
-                Toast.makeText(this, "Usage reports cleared", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Back") { _, _ -> showSettingsDialog() }
-            .setPositiveButton("Done", null)
-            .show()
+        }
+        renderTab(current)
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
     }
 
     private fun openExternalYouTubeUrl(url: String) {
